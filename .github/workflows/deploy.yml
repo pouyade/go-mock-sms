@@ -1,0 +1,192 @@
+name: Validate and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION_FILE: go.mod
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Check formatting
+        shell: bash
+        run: test -z "$(gofmt -l $(find . -name '*.go' -not -path './.git/*'))"
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Static analysis
+        run: |
+          go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+      - name: Cross-build supported targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in \
+            "darwin arm64" \
+            "darwin amd64" \
+            "windows amd64" \
+            "windows arm64" \
+            "linux amd64" \
+            "linux arm64"; do
+            read -r goos goarch <<< "$target"
+            output="build-check/desktop-notify-${goos}-${goarch}"
+            if [[ "$goos" == "windows" ]]; then output="${output}.exe"; fi
+            mkdir -p build-check
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -o "$output" ./cmd/desktop-notify
+          done
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            archive: desktop-notify-darwin-arm64.tar.gz
+            format: tar.gz
+          - goos: darwin
+            goarch: amd64
+            archive: desktop-notify-darwin-amd64.tar.gz
+            format: tar.gz
+          - goos: windows
+            goarch: amd64
+            archive: desktop-notify-windows-amd64.zip
+            format: zip
+          - goos: windows
+            goarch: arm64
+            archive: desktop-notify-windows-arm64.zip
+            format: zip
+          - goos: linux
+            goarch: amd64
+            archive: desktop-notify-linux-amd64.tar.gz
+            format: tar.gz
+          - goos: linux
+            goarch: arm64
+            archive: desktop-notify-linux-arm64.tar.gz
+            format: tar.gz
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Build and package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          date_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          package_dir="package/${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "$package_dir"
+          binary="desktop-notify"
+          if [[ "$GOOS" == "windows" ]]; then binary="${binary}.exe"; fi
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${date_utc}" \
+            -o "${package_dir}/${binary}" ./cmd/desktop-notify
+          cp README.md LICENSE "$package_dir/"
+          if [[ "${{ matrix.format }}" == "zip" ]]; then
+            (cd "$package_dir" && zip -q -r "../../${{ matrix.archive }}" .)
+          else
+            tar -C "$package_dir" -czf "${{ matrix.archive }}" .
+          fi
+
+      - name: Verify Linux native smoke test
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./package/linux-amd64/desktop-notify --version
+          ./package/linux-amd64/desktop-notify --port 14466 >/tmp/desktop-notify.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:14466/health; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+          cat /tmp/desktop-notify.log
+          exit 1
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate and verify checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum ./*.tar.gz ./*.zip > checksums.txt
+          sha256sum -c checksums.txt
+          test "$(find . -maxdepth 1 \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)" -eq 6
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes.md <<'EOF'
+          Desktop Notify ${{ github.ref_name }}
+
+          Download the archive for your operating system and architecture.
+          Verify the download with checksums.txt.
+          EOF
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "Desktop Notify ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes-file release-notes.md
