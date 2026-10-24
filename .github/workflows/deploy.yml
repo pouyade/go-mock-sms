@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@b7bc3c12cff44b00d5edf2b1fc3a20a272449c77 # v6.0.0
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
           cache: false
@@ -102,7 +102,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@b7bc3c12cff44b00d5edf2b1fc3a20a272449c77 # v6.0.0
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
           cache: false
@@ -150,7 +150,7 @@ jobs:
           exit 1
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@615b319bd27bb32c3d64dca6b6ed6974d5fbe653 # v6.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
@@ -175,7 +175,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@b7bc3c12cff44b00d5edf2b1fc3a20a272449c77 # v6.0.0
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
           cache: false
@@ -302,7 +302,7 @@ jobs:
           xcrun stapler staple desktop-notify-macos-universal.dmg
 
       - name: Upload macOS packages
-        uses: actions/upload-artifact@615b319bd27bb32c3d64dca6b6ed6974d5fbe653 # v6.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: macos-packages
           path: |
