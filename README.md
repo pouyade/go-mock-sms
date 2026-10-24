@@ -395,7 +395,8 @@ the Go commands directly or run Make in a POSIX-compatible environment.
 The workflow in `.github/workflows/deploy.yml` validates formatting, modules,
 vetting, race tests, static analysis, vulnerability checks, and all six
 cross-build targets. A Linux AMD64 package also runs `--version` and a
-`/health` smoke test.
+`/health` smoke test. Pushes to `main` upload the six packaged binaries as
+GitHub Actions artifacts; version tags additionally publish a GitHub Release.
 
 Push a version tag to publish a release:
 
@@ -657,7 +658,8 @@ git push origin v0.1.0
 
 workflow ابتدا format، test، vet، race test، تحلیل ایستا، بررسی آسیب‌پذیری و
 ساخت هر شش معماری را اجرا می‌کند؛ سپس برای tagهای `v*` فایل‌های release و
-`checksums.txt` را منتشر می‌کند.
+`checksums.txt` را منتشر می‌کند. Push روی شاخهٔ `main` نیز هر شش فایل binary را
+به‌عنوان artifact در GitHub Actions بارگذاری می‌کند.
 
 ### امنیت و محدودیت‌ها
 
