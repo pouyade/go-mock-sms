@@ -67,6 +67,8 @@ Each release contains:
 - `desktop-notify-windows-arm64.zip`
 - `desktop-notify-linux-amd64.tar.gz`
 - `desktop-notify-linux-arm64.tar.gz`
+- `desktop-notify-macos-universal.app.zip`
+- `desktop-notify-macos-universal.dmg`
 - `checksums.txt`
 
 Verify an archive on macOS or Linux:
@@ -260,6 +262,9 @@ packaged application. A successful `osascript` process means macOS accepted
 the request, not that the banner was shown.
 
 Both Intel (`amd64`) and Apple Silicon (`arm64`) release archives are provided.
+The GitHub Release also includes a universal `Desktop Notify.app` archive and
+an optional disk image installer. The app is a background application; it does
+not provide a graphical dashboard.
 
 #### Windows
 
@@ -302,7 +307,8 @@ optional conveniences.
 #### macOS launchd
 
 Create `~/Library/LaunchAgents/com.pouyade.desktop-notify.plist`, replacing
-the binary path if needed:
+the binary path if needed. If the `.dmg` release was installed into
+`/Applications`, use the app executable path below:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -314,7 +320,7 @@ the binary path if needed:
   <string>com.pouyade.desktop-notify</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/desktop-notify</string>
+    <string>/Applications/Desktop Notify.app/Contents/MacOS/desktop-notify</string>
     <string>--host</string>
     <string>127.0.0.1</string>
     <string>--port</string>
@@ -395,8 +401,26 @@ the Go commands directly or run Make in a POSIX-compatible environment.
 The workflow in `.github/workflows/deploy.yml` validates formatting, modules,
 vetting, race tests, static analysis, vulnerability checks, and all six
 cross-build targets. A Linux AMD64 package also runs `--version` and a
-`/health` smoke test. Pushes to `main` upload the six packaged binaries as
-GitHub Actions artifacts; version tags additionally publish a GitHub Release.
+`/health` smoke test. Pushes to `main` upload the six packaged binaries and
+macOS packages as GitHub Actions artifacts; version tags additionally publish
+a GitHub Release containing the six platform archives, the macOS `.app` zip,
+the macOS `.dmg`, and checksums.
+
+The macOS package is ad-hoc signed by default. For public Gatekeeper-friendly
+distribution, configure these GitHub repository secrets:
+
+- `MACOS_SIGNING_CERTIFICATE_BASE64`
+- `MACOS_SIGNING_CERTIFICATE_PASSWORD`
+- `MACOS_SIGNING_IDENTITY`
+- `MACOS_KEYCHAIN_PASSWORD`
+- `APPLE_ID`
+- `APPLE_TEAM_ID`
+- `APPLE_APP_PASSWORD`
+
+When all secrets are present, the workflow imports the Developer ID
+certificate, signs the app, notarizes the DMG, and staples the notarization
+ticket. Without them, the DMG is still built but users may need to approve it
+manually in macOS security settings.
 
 Push a version tag to publish a release:
 
@@ -659,7 +683,13 @@ git push origin v0.1.0
 workflow ابتدا format، test، vet، race test، تحلیل ایستا، بررسی آسیب‌پذیری و
 ساخت هر شش معماری را اجرا می‌کند؛ سپس برای tagهای `v*` فایل‌های release و
 `checksums.txt` را منتشر می‌کند. Push روی شاخهٔ `main` نیز هر شش فایل binary را
-به‌عنوان artifact در GitHub Actions بارگذاری می‌کند.
+به‌عنوان artifact در GitHub Actions بارگذاری می‌کند. برای macOS علاوه بر archive،
+یک فایل universal با پسوند `.app.zip` و یک فایل `.dmg` نیز ساخته می‌شود.
+
+به‌صورت پیش‌فرض امضای macOS به‌صورت ad-hoc است. برای امضای رسمی Developer ID و
+notarization باید secretهای امضای Apple را در تنظیمات GitHub repository قرار دهید.
+در صورت نبود این secretها، فایل DMG ساخته می‌شود اما ممکن است macOS برای اجرای
+آن تأیید دستی بخواهد.
 
 ### امنیت و محدودیت‌ها
 

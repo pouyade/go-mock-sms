@@ -156,10 +156,164 @@ jobs:
           path: ${{ matrix.archive }}
           if-no-files-found: error
 
+  macos-package:
+    name: Package macOS app and disk image
+    needs: validate
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+      COMMIT: ${{ github.sha }}
+      MACOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.MACOS_SIGNING_CERTIFICATE_BASE64 }}
+      MACOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Build universal macOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_dir="staging/Desktop Notify.app"
+          mkdir -p "$app_dir/Contents/MacOS"
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            short_version="${GITHUB_REF_NAME#v}"
+          else
+            short_version="0.0.0"
+          fi
+
+          build_flags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath \
+            -ldflags "$build_flags" \
+            -o /tmp/desktop-notify-arm64 ./cmd/desktop-notify
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath \
+            -ldflags "$build_flags" \
+            -o /tmp/desktop-notify-amd64 ./cmd/desktop-notify
+          lipo -create /tmp/desktop-notify-arm64 /tmp/desktop-notify-amd64 \
+            -output "$app_dir/Contents/MacOS/desktop-notify"
+          chmod 755 "$app_dir/Contents/MacOS/desktop-notify"
+
+          cat > "$app_dir/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>desktop-notify</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.pouyade.desktop-notify</string>
+            <key>CFBundleName</key>
+            <string>Desktop Notify</string>
+            <key>CFBundleDisplayName</key>
+            <string>Desktop Notify</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${short_version}</string>
+            <key>CFBundleVersion</key>
+            <string>${GITHUB_RUN_NUMBER}</string>
+            <key>LSBackgroundOnly</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          "$app_dir/Contents/MacOS/desktop-notify" --version
+
+      - name: Configure signing keychain
+        if: env.MACOS_SIGNING_CERTIFICATE_BASE64 != '' && env.MACOS_SIGNING_CERTIFICATE_PASSWORD != '' && env.MACOS_SIGNING_IDENTITY != '' && env.MACOS_KEYCHAIN_PASSWORD != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain_path="$RUNNER_TEMP/desktop-notify-signing.keychain-db"
+          certificate_path="$RUNNER_TEMP/signing-certificate.p12"
+          echo "$MACOS_SIGNING_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$MACOS_SIGNING_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+
+      - name: Sign macOS app
+        if: env.MACOS_SIGNING_CERTIFICATE_BASE64 != '' && env.MACOS_SIGNING_CERTIFICATE_PASSWORD != '' && env.MACOS_SIGNING_IDENTITY != '' && env.MACOS_KEYCHAIN_PASSWORD != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_dir="staging/Desktop Notify.app"
+          codesign --force --options runtime --timestamp \
+            --sign "$MACOS_SIGNING_IDENTITY" "$app_dir"
+          codesign --verify --deep --strict --verbose=2 "$app_dir"
+
+      - name: Ad-hoc sign macOS app
+        if: env.MACOS_SIGNING_CERTIFICATE_BASE64 == '' || env.MACOS_SIGNING_CERTIFICATE_PASSWORD == '' || env.MACOS_SIGNING_IDENTITY == '' || env.MACOS_KEYCHAIN_PASSWORD == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_dir="staging/Desktop Notify.app"
+          echo "Complete Apple signing secrets are not configured; using an ad-hoc signature."
+          codesign --force --deep --sign - "$app_dir"
+          codesign --verify --deep --strict --verbose=2 "$app_dir"
+
+      - name: Create macOS app archive and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dmg-root
+          cp -R "staging/Desktop Notify.app" dmg-root/
+          ln -s /Applications dmg-root/Applications
+          ditto -c -k --keepParent \
+            "staging/Desktop Notify.app" \
+            desktop-notify-macos-universal.app.zip
+          hdiutil create \
+            -volname "Desktop Notify" \
+            -srcfolder dmg-root \
+            -ov \
+            -format UDZO \
+            desktop-notify-macos-universal.dmg
+
+      - name: Notarize macOS DMG
+        if: env.MACOS_SIGNING_CERTIFICATE_BASE64 != '' && env.MACOS_SIGNING_CERTIFICATE_PASSWORD != '' && env.MACOS_SIGNING_IDENTITY != '' && env.MACOS_KEYCHAIN_PASSWORD != '' && env.APPLE_ID != '' && env.APPLE_TEAM_ID != '' && env.APPLE_APP_PASSWORD != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit desktop-notify-macos-universal.dmg \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          xcrun stapler staple desktop-notify-macos-universal.dmg
+
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-packages
+          path: |
+            desktop-notify-macos-universal.app.zip
+            desktop-notify-macos-universal.dmg
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, macos-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -174,9 +328,9 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum ./*.tar.gz ./*.zip > checksums.txt
+          sha256sum ./*.tar.gz ./*.zip ./*.dmg > checksums.txt
           sha256sum -c checksums.txt
-          test "$(find . -maxdepth 1 \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)" -eq 6
+          test "$(find . -maxdepth 1 \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' \) | wc -l)" -eq 8
 
       - name: Publish release
         env:
